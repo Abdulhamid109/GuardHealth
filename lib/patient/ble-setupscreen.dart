@@ -120,9 +120,86 @@ class _BLESetupScreenState extends State<BLESetupScreen> {
       ? r.advertisementData.advName
       : r.device.platformName;
 
-  void connectDevice(){
-    
+  void connectDevice(BluetoothDevice device) async {
+    await FlutterBluePlus.stopScan();
+
+    await device.connect(
+      license: License.nonprofit,
+      autoConnect: false,
+    );
+
+    await discoverServices(device);
   }
+
+  // Future<void> discoverServices(BluetoothDevice device) async {
+  //   try {
+  //     List<BluetoothService> services = await device.discoverServices();
+  //     for (BluetoothService service in services) {
+  //       for (BluetoothCharacteristic c in service.characteristics) {
+  //         if (c.properties.read) {
+  //           // var data = await c.read();
+  //           debugPrint(
+  //             '${service.uuid} / ${c.uuid}  '
+  //             'read:${c.properties.read} write:${c.properties.write} '
+  //             'writeNoResp:${c.properties.writeWithoutResponse} '
+  //             'notify:${c.properties.notify}',
+  //           );
+  //         }
+  //         //write characteristics
+  //         if (c.properties.write) {}
+
+  //         if (c.properties.notify) {
+  //           await c.setNotifyValue(true);
+  //           // c.lastValueStream.listen((value) {
+  //           //   print('Notification: $value');
+  //           // });
+  //           c.onValueReceived.listen((value) {
+  //             final data = String.fromCharCodes(value);
+  //             debugPrint("Recieved ints -> $value");
+  //             print('Received: $data');
+  //             print("Cahr -> $c");
+  //             showDialog(context: context, builder: (context) {
+  //               return AlertDialog(
+  //                 title: Text("HeartRate - $value"),
+  //               );
+  //             },);
+  //           });
+  //         }
+  //       }
+  //     }
+  //   } catch (e) {
+  //     debugPrint("Failed to discover the services");
+  //   }
+  // }
+
+  StreamSubscription? _hrsub;
+  Future<void> discoverServices(BluetoothDevice device) async {
+  try {
+    final services = await device.discoverServices();
+
+    for (final service in services) {
+      for (final c in service.characteristics) {
+        // Only subscribe to the HR Measurement characteristic
+        if (c.uuid == Guid('2A37') && c.properties.notify) {
+          await c.setNotifyValue(true);
+
+          _hrsub = c.onValueReceived.listen((value) {
+            final flags = value[0];
+            final bpm = (flags & 0x01) == 1
+                ? (value[2] << 8) | value[1]
+                : value[1];
+
+            debugPrint('Heart Rate: $bpm bpm');
+          });
+          device.cancelWhenDisconnected(_hrsub!);
+          await c.setNotifyValue(true);
+        }
+      }
+    }
+  } catch (e) {
+    debugPrint("Failed: $e");
+  }
+}   
 
   @override
   Widget build(BuildContext context) {
@@ -132,15 +209,20 @@ class _BLESetupScreenState extends State<BLESetupScreen> {
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
+            Text(
+              "Make sure that the device is not connected",
+              style: TextStyle(color: Colors.red),
+            ),
+            SizedBox(height: 5),
             ElevatedButton(
               onPressed: _scanning ? null : startScan,
               child: Text(_scanning ? 'Scanning...' : 'Start scan'),
             ),
-            SwitchListTile(
-              title: const Text('Show all devices (debug)'),
-              value: _showAll,
-              onChanged: (v) => setState(() => _showAll = v),
-            ),
+            // SwitchListTile(
+            //   title: const Text('Show all devices (debug)'),
+            //   value: _showAll,
+            //   onChanged: (v) => setState(() => _showAll = v),
+            // ),
             Expanded(
               child: _devices.isEmpty
                   ? const Center(child: Text('No devices found'))
@@ -155,7 +237,10 @@ class _BLESetupScreenState extends State<BLESetupScreen> {
                           subtitle: Text(
                             '${d.device.remoteId.str}  •  ${d.rssi} dBm',
                           ),
-                          onTap: () => debugPrint('Selected: $name'),
+                          onTap: () {
+                            connectDevice(d.device);
+                            debugPrint('Selected: $name');
+                          },
                         );
                       },
                     ),
